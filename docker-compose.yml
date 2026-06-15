@@ -1,0 +1,180 @@
+version: '3.8'
+
+# ============================================================
+# DevOps Monitoring Lab — Full Observability Stack
+# Author: Priya Malewadkar
+# ============================================================
+# Services:
+#   - Prometheus      :9090  (metrics + alerting engine)
+#   - Alertmanager    :9093  (alert routing — Slack + Email)
+#   - Node Exporter   :9100  (host system metrics)
+#   - cAdvisor        :8081  (Docker container metrics)
+#   - Flask App       :8080  (custom instrumented app)
+#   - Grafana         :3000  (dashboards)
+#
+# Start: docker compose up -d
+# Stop:  docker compose down
+# ============================================================
+
+services:
+
+  # ------------------------------------------------------------
+  # PROMETHEUS — Metrics engine + alert rule evaluator
+  # UI: http://localhost:9090
+  # ------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./alert_rules.yml:/etc/prometheus/alert_rules.yml
+      - ./recording_rules.yml:/etc/prometheus/recording_rules.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    networks:
+      - monitoring
+    depends_on:
+      - node-exporter
+      - cadvisor
+      - alertmanager
+
+  # ------------------------------------------------------------
+  # ALERTMANAGER — Routes alerts to Slack and Email
+  # UI: http://localhost:9093
+  # ------------------------------------------------------------
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: alertmanager
+    restart: unless-stopped
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--cluster.advertise-address=0.0.0.0:9093'
+    ports:
+      - "9093:9093"
+    networks:
+      - monitoring
+
+  # ------------------------------------------------------------
+  # NODE EXPORTER — Host-level system metrics
+  # Metrics: http://localhost:9100/metrics
+  # Exposes: CPU, memory, disk, network, filesystem
+  # ------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--no-collector.ipvs'
+    ports:
+      - "9100:9100"
+    networks:
+      - monitoring
+    pid: host
+
+  # ------------------------------------------------------------
+  # cADVISOR — Docker container-level metrics  ← NEW
+  # UI:      http://localhost:8081
+  # Metrics: http://localhost:8081/metrics
+  # Exposes: per-container CPU, memory, network, restarts
+  # ------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: cadvisor
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /cgroup:/cgroup:ro
+    ports:
+      - "8081:8080"
+    networks:
+      - monitoring
+
+  # ------------------------------------------------------------
+  # FLASK APP — Custom instrumented Python application
+  # App:     http://localhost:8080
+  # Metrics: http://localhost:8080/metrics
+  # ------------------------------------------------------------
+  flask-app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: flask-app
+    restart: unless-stopped
+    environment:
+      - APP_PORT=8080
+      - APP_ENV=production
+    ports:
+      - "8080:8080"
+    networks:
+      - monitoring
+
+  # ------------------------------------------------------------
+  # GRAFANA — Dashboards and visualisation
+  # UI: http://localhost:3000  (admin / admin123)
+  # ------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_DOMAIN=localhost
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3000:3000"
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+
+# ------------------------------------------------------------
+# VOLUMES — data persists across container restarts
+# ------------------------------------------------------------
+volumes:
+  prometheus_data:
+    driver: local
+  alertmanager_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+# ------------------------------------------------------------
+# NETWORK — all services talk to each other by container name
+# ------------------------------------------------------------
+networks:
+  monitoring:
+    driver: bridge
+    name: monitoring_network
