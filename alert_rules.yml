@@ -1,0 +1,237 @@
+# ============================================================
+# Alert Rules — DevOps Monitoring Lab
+# ============================================================
+
+groups:
+
+  # =========================================================
+  # GROUP 1: Infrastructure Alerts (Node Exporter)
+  # =========================================================
+  - name: infrastructure
+    rules:
+
+      # Alert when any monitored target goes DOWN
+      - alert: InstanceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: ops
+        annotations:
+          summary: "Instance {{ $labels.instance }} ({{ $labels.job }}) is DOWN"
+          description: >
+            {{ $labels.instance }} of job {{ $labels.job }} has been
+            unreachable for more than 1 minute.
+          runbook: "https://github.com/YOUR_USERNAME/devops-monitoring-lab/wiki/runbooks/instance-down"
+
+      # Warning-level CPU usage (uses the recording rule we created)
+      - alert: HighCpuUsage
+        expr: instance:node_cpu_usage:rate5m > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: >
+            CPU usage is {{ $value | printf "%.1f" }}% on {{ $labels.instance }},
+            sustained for more than 5 minutes.
+
+      # Critical-level CPU usage
+      - alert: CriticalCpuUsage
+        expr: instance:node_cpu_usage:rate5m > 95
+        for: 2m
+        labels:
+          severity: critical
+          team: ops
+        annotations:
+          summary: "CRITICAL CPU usage on {{ $labels.instance }}"
+          description: >
+            CPU usage is {{ $value | printf "%.1f" }}% on {{ $labels.instance }}.
+            Immediate action required!
+
+      # Memory usage (uses recording rule)
+      - alert: HighMemoryUsage
+        expr: instance:node_memory_usage:percent > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: >
+            Memory usage is {{ $value | printf "%.1f" }}% on {{ $labels.instance }}.
+            Consider investigating memory leaks.
+
+      # Disk space (uses recording rule)
+      - alert: LowDiskSpace
+        expr: instance:node_disk_usage:percent > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: >
+            Disk usage is {{ $value | printf "%.1f" }}% on / for {{ $labels.instance }}.
+
+      # Critically low disk space
+      - alert: CriticalDiskSpace
+        expr: instance:node_disk_usage:percent > 95
+        for: 1m
+        labels:
+          severity: critical
+          team: ops
+        annotations:
+          summary: "CRITICAL disk space on {{ $labels.instance }}"
+          description: >
+            Disk usage is {{ $value | printf "%.1f" }}% on / for {{ $labels.instance }}.
+            URGENT: clean up or expand storage!
+
+  # =========================================================
+  # GROUP 2: Application Alerts (Flask app)
+  # =========================================================
+  - name: application
+    rules:
+
+      # High error rate (uses recording rule)
+      - alert: HighErrorRate
+        expr: job:app_error_rate:percent5m > 5
+        for: 2m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "High error rate on flask-app"
+          description: >
+            Error rate is {{ $value | printf "%.1f" }}%. Threshold is 5%.
+            Check application logs for root cause.
+
+      # High p95 latency (uses recording rule)
+      - alert: HighP95Latency
+        expr: job:app_request_latency:p95_5m > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "High p95 latency detected"
+          description: >
+            p95 request latency is {{ $value | printf "%.3f" }}s
+            (threshold: 500ms). Check for slow queries or contention.
+
+      # Traffic drop / anomaly
+      - alert: LowRequestRate
+        expr: sum(job:app_requests:rate5m) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Very low request rate on flask-app"
+          description: >
+            Total request rate dropped to {{ $value | printf "%.3f" }} req/s.
+            This might indicate an upstream issue.
+
+  # =========================================================
+  # GROUP 3: Container Alerts (cAdvisor)  — NEW
+  # =========================================================
+  - name: containers
+    rules:
+
+      # Container using excessive CPU
+      - alert: ContainerHighCpu
+        expr: container:cpu_usage:rate5m > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Container {{ $labels.name }} high CPU usage"
+          description: >
+            Container {{ $labels.name }} is using
+            {{ $value | printf "%.1f" }}% CPU, sustained for 5 minutes.
+
+      # Container using excessive memory
+      - alert: ContainerHighMemory
+        expr: container:memory_usage:mb > 512
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Container {{ $labels.name }} high memory usage"
+          description: >
+            Container {{ $labels.name }} is using
+            {{ $value | printf "%.0f" }}MB of memory (threshold: 512MB).
+
+      # Container restarted recently (possible crash loop)
+      - alert: ContainerRestarted
+        expr: increase(container_start_time_seconds[10m]) > 0
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Container {{ $labels.name }} restarted"
+          description: >
+            Container {{ $labels.name }} was restarted within the last
+            10 minutes. Check logs for crash loops: docker logs {{ $labels.name }}
+
+  # =========================================================
+  # GROUP 4: Prometheus Self-Monitoring
+  # =========================================================
+  - name: prometheus-self
+    rules:
+
+      # Config reload failure
+      - alert: PrometheusConfigReloadFailed
+        expr: prometheus_config_last_reload_successful == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: ops
+        annotations:
+          summary: "Prometheus config reload failed"
+          description: >
+            Prometheus on {{ $labels.instance }} failed to reload its
+            configuration. Check for YAML syntax errors.
+            Run: curl -X POST http://localhost:9090/-/reload
+
+      # TSDB errors
+      - alert: PrometheusTsdbErrors
+        expr: increase(prometheus_tsdb_head_series_failed_total[1h]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Prometheus TSDB errors detected"
+          description: >
+            Prometheus is experiencing TSDB errors. May indicate storage
+            issues or corrupt data.
+
+      # Slow scrapes
+      - alert: SlowScrape
+        expr: max by(job) (prometheus_target_scrape_duration_seconds) > 10
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Slow Prometheus scrape for job {{ $labels.job }}"
+          description: >
+            One or more scrape targets for job {{ $labels.job }} are
+            responding slowly (> 10s). May cause gaps in metrics.
+
+      # Recording rule evaluation failures  — NEW
+      - alert: RecordingRuleEvaluationFailed
+        expr: increase(prometheus_rule_evaluation_failures_total[15m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Recording/alert rule evaluation failed"
+          description: >
+            One or more rule evaluations have failed in the last 15 minutes.
+            Check Prometheus logs for the failing expression.
