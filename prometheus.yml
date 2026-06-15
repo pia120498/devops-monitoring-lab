@@ -1,0 +1,84 @@
+# ============================================================
+# Prometheus Configuration — DevOps Monitoring Lab
+# ============================================================
+
+global:
+  # How often Prometheus scrapes targets by default
+  scrape_interval: 15s
+
+  # How often Prometheus evaluates alert + recording rules
+  evaluation_interval: 15s
+
+  # Labels added to every metric and alert (useful for multi-env setups)
+  external_labels:
+    environment: 'lab'
+    project: 'devops-monitoring-lab'
+
+# ============================================================
+# ALERTING — point Prometheus at Alertmanager
+# ============================================================
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+      timeout: 10s
+
+# ============================================================
+# RULE FILES — alert rules + recording rules
+# ============================================================
+rule_files:
+  - "alert_rules.yml"
+  - "recording_rules.yml"
+
+# ============================================================
+# SCRAPE CONFIGS — what Prometheus monitors
+# ============================================================
+scrape_configs:
+
+  # --- Prometheus itself (self-monitoring) ---
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+
+  # --- Node Exporter: host system metrics ---
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'lab-host'
+
+  # --- cAdvisor: per-container metrics  (NEW) ---
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 15s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'lab-host'
+
+  # --- Alertmanager: monitor its own health ---
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+    scrape_interval: 30s
+
+  # --- Flask App: custom application metrics ---
+  - job_name: 'flask-app'
+    static_configs:
+      - targets: ['flask-app:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # --- Grafana: monitor Grafana's own performance ---
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s

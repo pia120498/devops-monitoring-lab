@@ -1,0 +1,83 @@
+# ============================================================
+# Recording Rules — DevOps Monitoring Lab
+# ============================================================
+# WHY THIS FILE EXISTS:
+# Some PromQL queries (like CPU % across a 5m window, or p95
+# latency) are expensive to compute every time a dashboard
+# loads. Recording rules pre-compute these on a schedule and
+# save the RESULT as a new time series. Grafana then queries
+# the cheap pre-computed series instead of recalculating the
+# expensive expression on every refresh.
+#
+# Naming convention (Prometheus best practice):
+#   level:metric:operations
+#   e.g. instance:cpu_usage:rate5m
+# ============================================================
+
+groups:
+
+  # =========================================================
+  # GROUP 1: Host-level recording rules (from Node Exporter)
+  # =========================================================
+  - name: host_recording_rules
+    interval: 30s
+    rules:
+
+      # Pre-computed CPU usage % per instance (used heavily on dashboards)
+      - record: instance:node_cpu_usage:rate5m
+        expr: >
+          100 - (avg by(instance) (
+            irate(node_cpu_seconds_total{mode="idle"}[5m])
+          ) * 100)
+
+      # Pre-computed memory usage % per instance
+      - record: instance:node_memory_usage:percent
+        expr: >
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100
+
+      # Pre-computed disk usage % per instance (root filesystem)
+      - record: instance:node_disk_usage:percent
+        expr: >
+          (1 - (
+            node_filesystem_avail_bytes{mountpoint="/", fstype!="tmpfs"}
+            / node_filesystem_size_bytes{mountpoint="/", fstype!="tmpfs"}
+          )) * 100
+
+  # =========================================================
+  # GROUP 2: Application-level recording rules (from Flask app)
+  # =========================================================
+  - name: app_recording_rules
+    interval: 30s
+    rules:
+
+      # Pre-computed request rate (requests/sec) per endpoint
+      - record: job:app_requests:rate5m
+        expr: >
+          sum by(endpoint) (rate(app_requests_total[5m]))
+
+      # Pre-computed error rate % (errors / total requests)
+      - record: job:app_error_rate:percent5m
+        expr: >
+          (sum(rate(app_errors_total[5m])) / sum(rate(app_requests_total[5m]))) * 100
+
+      # Pre-computed p95 latency in seconds
+      - record: job:app_request_latency:p95_5m
+        expr: >
+          histogram_quantile(0.95, rate(app_request_latency_seconds_bucket[5m]))
+
+  # =========================================================
+  # GROUP 3: Container-level recording rules (from cAdvisor) — NEW
+  # =========================================================
+  - name: container_recording_rules
+    interval: 30s
+    rules:
+
+      # Pre-computed CPU usage % per container
+      - record: container:cpu_usage:rate5m
+        expr: >
+          sum by(name) (rate(container_cpu_usage_seconds_total{name!=""}[5m])) * 100
+
+      # Pre-computed memory usage in MB per container
+      - record: container:memory_usage:mb
+        expr: >
+          sum by(name) (container_memory_usage_bytes{name!=""}) / 1024 / 1024
